@@ -1,0 +1,22 @@
+name: flooding_data
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  # Core data tools
+  - polars
+  - geopandas
+  # Airflow and its dependencies
+  - apache-airflow
+  # Testing
+  - pytest
+  - pytest-cov
+  # Development tools
+  - black
+  - flake8
+  - mypy
+  # Build tools
+  - build
+  - setuptools
