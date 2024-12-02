@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 class FloodNetClient:
     """Client for fetching and processing FloodNet data"""
 
-    def __init__(self, http_conn_id: str = "floodnet_default"):
+    def __init__(self, hook: HttpHook):
         logger.info(f"Initializing FloodDataClient with connection ID: {http_conn_id}")
-        self.hook = HttpHook(method="GET", http_conn_id=http_conn_id)
+        self.hook = hook
 
     def get_deployments(self) -> pl.DataFrame:
         """Get and process deployment data"""
@@ -29,6 +29,11 @@ class FloodNetClient:
         except Exception as e:
             logger.error(f"Error fetching deployments: {str(e)}")
             raise
+
+    @staticmethod
+    def create_hook() -> HttpHook:
+        hook = HttpHook(method="GET", base_url=API_BASE)
+        return hook
 
     @staticmethod
     def st_filter_deployments_within(
