@@ -5,9 +5,26 @@ import polars as pl
 from src.clients.FloodNetClient import FloodNetClient, DirectHttpHook
 
 
+class DirectHttpHook:
+    """Simple hook that makes HTTP requests directly without Airflow"""
+
+    def __init__(
+        self,
+        method: str = "GET",
+        base_url: str = "https://api.dev.floodlabs.nyc/api/rest/",
+    ):
+        self.method = method
+        self.base_url = base_url
+
+    def run(self, endpoint: str, data: Dict[str, Any] = None) -> requests.Response:
+        url = f"{self.base_url}{endpoint}"
+        return requests.request(self.method, url, params=data)
+
+
 @pytest.fixture
 def client():
-    return FloodNetClient()  # Uses default "floodnet_default" connection ID
+    hook = DirectHttpHook()
+    return FloodNetClient(hook)  # Uses default "floodnet_default" connection ID
 
 
 def test_get_deployments(client):
