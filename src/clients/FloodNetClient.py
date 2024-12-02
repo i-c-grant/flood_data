@@ -6,6 +6,7 @@ from shapely.geometry.base import BaseGeometry
 import polars as pl
 import requests
 from airflow.providers.http.hooks.http import HttpHook
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,9 @@ class DirectHttpHook:
         self.method = method
         self.base_url = base_url
 
-    def run(self, endpoint: str, params: Dict[str, Any] = None) -> requests.Response:
+    def run(self, endpoint: str, data: Dict[str, Any] = None) -> requests.Response:
         url = f"{self.base_url}{endpoint}"
-        return requests.request(self.method, url, params=params)
+        return requests.request(self.method, url, params=data)
 
 
 class FloodNetClient:
@@ -79,24 +80,22 @@ class FloodNetClient:
     @staticmethod
     def _process_deployments(data: Dict[str, Any]) -> pl.DataFrame:
         """Transform raw deployment data into structured DataFrame"""
-        breakpoint()
+
         try:
-            deployments = pl.DataFrame(data[0])
+            deployments = pl.DataFrame(data["deployments"])
             logger.debug(f"Initial deployments shape: {deployments.shape}")
 
-            coordinates = deployments.select(
-                pl.col("location").struct.field("coordinates")
-            ).to_series()
+            # Add separate lon/lat columns
+            processed_deployments = deployments.with_columns(
+                pl.col("location").struct.field("coordinates").alias("coords")
+            ).select(
+                pl.all().exclude("location", "coords"),
+                pl.col("coords").list.first().alias("lon"),
+                pl.col("coords").list.last().alias("lat"),
+            )
 
-            processed = deployments.with_columns(
-                [
-                    pl.Series("lon", [coord[0] for coord in coordinates]),
-                    pl.Series("lat", [coord[1] for coord in coordinates]),
-                ]
-            ).drop("location")
-
-            logger.info(f"Processed {len(processed)} deployment records")
-            return processed
+            logger.info(f"Processed {len(processed_deployments)} deployment records")
+            return processed_deployments
         except Exception as e:
             logger.error(f"Error processing deployments data: {str(e)}")
             raise
@@ -119,17 +118,24 @@ class FloodNetClient:
         try:
             response = self.hook.run(
                 f"deployments/flood/{deployment_id}/depth",
-                params={"start_time": start_time, "end_time": end_time},
+                data={"start_time": start_time, "end_time": end_time},
             )
 
-            depth_data = pl.DataFrame(response.json())
+            depth_data = pl.from_dicts(
+                response.json()["depth_data"],
+                schema={
+                    "deployment_id": pl.String,
+                    "time": pl.String,
+                    "depth_proc_mm": pl.Float64,
+                },
+            ).with_columns(pl.col("time").str.to_datetime())
+
             if len(depth_data) > 0:
                 logger.debug(
                     f"Got {len(depth_data)} readings for deployment {deployment_id}"
                 )
-                return depth_data.with_columns(
-                    pl.col("time").str.strptime(pl.Datetime, "%Y-%m-%dT%H:%M:%S%.fZ")
-                )
+
+                return depth_data
             else:
                 logger.debug(f"No depth data found for deployment {deployment_id}")
                 return pl.DataFrame()
@@ -147,9 +153,7 @@ class FloodNetClient:
 
         depth_data_list = []
         for deployment_id in deployment_ids:
-            depth_data = self.get_single_deployment_depth(
-                deployment_id, start_time, end_time
-            )
+            depth_data = self.get_deployment_depth(deployment_id, start_time, end_time)
             if not depth_data.is_empty():
                 depth_data_list.append(depth_data)
 
