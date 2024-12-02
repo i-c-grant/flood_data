@@ -1,0 +1,110 @@
+import pytest
+from datetime import datetime, timedelta
+import polars as pl
+
+from floodnet_client import FloodNetClient, DirectHttpHook
+
+
+@pytest.fixture
+def client():
+    return FloodNetClient()  # Uses default "floodnet_default" connection ID
+
+
+def test_get_deployments(client):
+    """Test fetching real deployment data"""
+    deployments = client.get_deployments()
+
+    # Verify structure
+    assert isinstance(deployments, pl.DataFrame)
+    required_cols = {"deployment_id", "lon", "lat", "date_deployed", "sensor_status"}
+    assert all(col in deployments.columns for col in required_cols)
+
+    # Verify data types
+    assert deployments["lon"].dtype == pl.Float64
+    assert deployments["lat"].dtype == pl.Float64
+
+    # Verify reasonable coordinate bounds for NYC
+    assert all((-74.3 < lon < -73.7) for lon in deployments["lon"])
+    assert all((40.4 < lat < 40.95) for lat in deployments["lat"])
+
+    print(f"Found {len(deployments)} total deployments")
+
+
+def test_get_single_deployment_depth(client):
+    """Test fetching depth data for a single deployment"""
+    # First get deployments to find an active one
+    deployments = client.get_deployments()
+    active_deployments = deployments.filter((pl.col("sensor_status") == "good"))
+
+    if len(active_deployments) == 0:
+        pytest.skip("No active deployments found")
+
+    # Get depth data for the last 24 hours
+    deployment_id = active_deployments["deployment_id"][0]
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=1)
+
+    depth_data = client.get_deployment_depth(
+        deployment_id, start_time.isoformat() + "Z", end_time.isoformat() + "Z"
+    )
+
+    # Verify structure
+    assert isinstance(depth_data, pl.DataFrame)
+    assert "time" in depth_data.columns
+    assert "depth" in depth_data.columns
+
+    if len(depth_data) > 0:
+        # Verify data types
+        assert all(isinstance(t, datetime) for t in depth_data["time"])
+        assert depth_data["depth"].dtype == pl.Float64
+
+        # Verify reasonable depth values (in mm)
+        assert all((0 <= d <= 1000) for d in depth_data["depth"])
+
+        print(f"Found {len(depth_data)} readings for deployment {deployment_id}")
+    else:
+        print(f"No recent depth readings for deployment {deployment_id}")
+
+
+def test_fetch_multiple_deployments(client):
+    """Test fetching depth data for multiple deployments"""
+    # Get active deployments
+    deployments = client.get_deployments()
+    active_deployments = deployments.filter((pl.col("sensor_status") == "good"))
+
+    if len(active_deployments) < 2:
+        pytest.skip("Need at least 2 active deployments")
+
+    # Get data for 2 deployments over last hour
+    deployment_ids = active_deployments["deployment_id"][:2].to_list()
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(hours=1)
+
+    depth_data = client.fetch_depth_data(
+        deployment_ids, start_time.isoformat() + "Z", end_time.isoformat() + "Z"
+    )
+
+    # Verify structure and data
+    assert isinstance(depth_data, pl.DataFrame)
+    if len(depth_data) > 0:
+        assert "time" in depth_data.columns
+        assert "depth" in depth_data.columns
+        assert "deployment_id" in depth_data.columns
+
+        # Check we got data for both deployments
+        unique_deployments = set(depth_data["deployment_id"])
+        assert len(unique_deployments) <= 2
+
+        print(f"Found data for {len(unique_deployments)} deployments:")
+        for dep_id in unique_deployments:
+            dep_data = depth_data.filter(pl.col("deployment_id") == dep_id)
+            print(f"- {dep_id}: {len(dep_data)} readings")
+    else:
+        print("No recent depth readings found")
+
+
+if __name__ == "__main__":
+    client = FloodNetClient()  # Uses default connection ID
+    test_get_deployments(client)
+    test_get_single_deployment_depth(client)
+    test_fetch_multiple_deployments(client)
