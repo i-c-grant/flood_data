@@ -10,6 +10,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+API_BASE: str = "https://api.dev.floodlabs.nyc/api/rest/"
 
 
 class FloodNetClient:
