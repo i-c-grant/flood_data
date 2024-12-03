@@ -1,0 +1,21 @@
+#!/bin/bash
+
+mkdir -p data
+
+ENDPOINT="https://data.cityofnewyork.us/resource/7t3b-ywvw.geojson"
+
+curl "$ENDPOINT?\$where=boro_name='Queens'" | \
+    ogr2ogr -f "GPKG" data/test_data.gpkg \
+	    "GeoJSON:/vsistdin/?buffer_limit=2000000" \
+	    -nlt MULTIPOLYGON \
+	    -nln "queens" -t_srs EPSG:4326 
+curl "$ENDPOINT?\$where=boro_name='Brooklyn'" | \
+    ogr2ogr -f "GPKG" data/test_data.gpkg \
+	    "GeoJSON:/vsistdin/?buffer_limit=2000000" \
+	    -nlt MULTIPOLYGON \
+	    -nln "brooklyn" -t_srs EPSG:4326 -update
+curl "$ENDPOINT" | \
+    ogr2ogr -f "GPKG" data/test_data.gpkg \
+	    "GeoJSON:/vsistdin/?buffer_limit=10000000" \
+	    -nlt MULTIPOLYGON \
+	    -nln "nyc" -t_srs EPSG:4326 -update
