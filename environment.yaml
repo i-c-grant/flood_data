@@ -8,6 +8,7 @@ dependencies:
   # Core data tools
   - polars
   - geopandas
+  - pyarrow
   # Airflow and its dependencies
   - apache-airflow
   # Testing
