@@ -1,8 +1,15 @@
-import pytest
-from datetime import datetime, timedelta, UTC
-import polars as pl
+import logging
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict
 
-from src.clients.FloodNetClient import FloodNetClient, DirectHttpHook
+import geopandas as gpd
+import polars as pl
+import pytest
+import requests
+from src.clients.FloodNetClient import FloodNetClient
+
+logger = logging.getLogger(__name__)
 
 
 class DirectHttpHook:
@@ -20,7 +27,13 @@ class DirectHttpHook:
         url = f"{self.base_url}{endpoint}"
         return requests.request(self.method, url, params=data)
 
+    def __str__(self):
+        return "dummy hook"
 
+
+######################################
+# General processing and API  tests  #
+######################################
 @pytest.fixture
 def client():
     hook = DirectHttpHook()
@@ -59,11 +72,9 @@ def test_get_single_deployment_depth(client):
     # Get depth data for the last week
     deployment_id = active_deployments["deployment_id"][0]
     end_time = datetime.now(UTC)
-    start_time = end_time - timedelta(days=7)
+    start_time = end_time - timedelta(days=1)
 
-    depth_data = client.get_deployment_depth(
-        deployment_id, start_time.isoformat(), end_time.isoformat()
-    )
+    depth_data = client.get_deployment_depth(deployment_id, start_time, end_time)
 
     # Verify structure
     assert isinstance(depth_data, pl.DataFrame)
@@ -127,3 +138,126 @@ if __name__ == "__main__":
     test_get_deployments(client)
     test_get_single_deployment_depth(client)
     test_fetch_multiple_deployments(client)
+
+
+#################
+# Spatial tests #
+#################
+@pytest.fixture
+def test_geometries():
+    """Load test geometries from GeoPackage"""
+    test_data_path = Path(__file__).parent / "data" / "test_data.gpkg"
+
+    return {
+        "queens": gpd.read_file(test_data_path, layer="queens").geometry,
+        "brooklyn": gpd.read_file(test_data_path, layer="brooklyn").geometry,
+        "nyc": gpd.read_file(test_data_path, layer="nyc").geometry,
+    }
+
+
+def test_spatial_filter_queens(client, test_geometries):
+    """Test filtering deployments within Queens bounds"""
+    # Get all deployments
+    all_deployments = client.get_deployments()
+
+    # Filter to Queens
+    queens_deployments = client.st_filter_deployments_within(
+        all_deployments, test_geometries["queens"]
+    )
+
+    # Basic validation
+    assert len(queens_deployments) <= len(all_deployments)
+    assert all((-73.95 < lon < -73.7) for lon in queens_deployments["lon"])
+    assert all((40.55 < lat < 40.8) for lat in queens_deployments["lat"])
+
+    print(f"Found {len(queens_deployments)} deployments in Queens")
+
+
+def test_spatial_filter_brooklyn(client, test_geometries):
+    """Test filtering deployments within Brooklyn bounds"""
+    all_deployments = client.get_deployments()
+
+    brooklyn_deployments = client.st_filter_deployments_within(
+        all_deployments, test_geometries["brooklyn"]
+    )
+
+    assert len(brooklyn_deployments) <= len(all_deployments)
+    assert all((-74.05 < lon < -73.85) for lon in brooklyn_deployments["lon"])
+    assert all((40.55 < lat < 40.75) for lat in brooklyn_deployments["lat"])
+
+    print(f"Found {len(brooklyn_deployments)} deployments in Brooklyn")
+
+
+def test_spatial_filter_nyc(client, test_geometries):
+    """Test filtering deployments within all of NYC"""
+    all_deployments = client.get_deployments()
+
+    nyc_deployments = client.st_filter_deployments_within(
+        all_deployments, test_geometries["nyc"]
+    )
+
+    # Should get same or very close to same number as all deployments
+    # Allow small difference in case some deployments are just outside city bounds
+    assert len(nyc_deployments) >= len(all_deployments) * 0.95
+
+    print(
+        f"Found {len(nyc_deployments)} deployments in NYC out of {len(all_deployments)} total"
+    )
+
+
+def test_spatial_filter_empty_result(client, test_geometries):
+    """Test filtering with geometry that should return no results"""
+    all_deployments = client.get_deployments()
+
+    # Create a small polygon far from NYC
+    far_away = gpd.GeoSeries(
+        gpd.points_from_xy(
+            x=[-118.2437], y=[34.0522]
+        ).buffer(  # Los Angeles coordinates
+            0.01
+        ),  # Small buffer around point
+        crs="EPSG:4326",
+    )
+
+    filtered = client.st_filter_deployments_within(all_deployments, far_away)
+    assert len(filtered) == 0
+
+
+def test_spatial_filter_crs_conversion(client, test_geometries):
+    """Test handling of different CRS in input geometry"""
+    all_deployments = client.get_deployments()
+
+    # Convert NYC bounds to State Plane (common for NYC data)
+    nyc_state_plane = test_geometries["nyc"].to_crs("EPSG:2263")
+
+    filtered = client.st_filter_deployments_within(all_deployments, nyc_state_plane)
+
+    # Should get approximately same results as with WGS84
+    nyc_wgs84 = client.st_filter_deployments_within(
+        all_deployments, test_geometries["nyc"]
+    )
+
+    assert abs(len(filtered) - len(nyc_wgs84)) <= 1
+
+
+def test_multiple_polygons(client, test_geometries):
+    """Test filtering with multiple polygons"""
+    import pandas as pd
+
+    all_deployments = client.get_deployments()
+
+    # Combine Brooklyn and Queens
+    bk_qns = gpd.GeoSeries(
+        pd.concat([test_geometries["brooklyn"], test_geometries["queens"]]),
+        crs="EPSG:4326",
+    )
+
+    filtered = client.st_filter_deployments_within(all_deployments, bk_qns)
+
+    # Should be less than total NYC deployments
+    nyc_deployments = client.st_filter_deployments_within(
+        all_deployments, test_geometries["nyc"]
+    )
+    assert len(filtered) < len(nyc_deployments)
+
+    print(f"Found {len(filtered)} deployments in Brooklyn and Queens combined")
