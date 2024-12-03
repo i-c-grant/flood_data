@@ -4,6 +4,9 @@ from typing import Optional, Union
 import polars as pl
 import geopandas as gpd
 
+TemporalFilter = Optional[Union[datetime, tuple[datetime, datetime]]]
+SpatialFilter = Optional[gpd.GeoSeries]
+
 
 class BaseClient(ABC):
     @abstractmethod
