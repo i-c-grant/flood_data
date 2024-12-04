@@ -9,8 +9,6 @@ dependencies:
   - polars
   - geopandas
   - pyarrow
-  # Airflow and its dependencies
-  - apache-airflow
   # Testing
   - pytest
   - pytest-cov
