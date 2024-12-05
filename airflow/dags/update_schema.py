@@ -1,9 +1,10 @@
 from datetime import datetime
 from pathlib import Path
+
 from airflow import DAG
-from airflow.operators.postgres_operator import PostgresOperator
-from airflow.models import Variable
 from airflow.decorators import task
+from airflow.models import Variable
+from airflow.operators.postgres_operator import PostgresOperator
 
 SCHEMA_VERSION = "1.0"
 SCHEMA_VERSION_KEY = "floodnet_schema_version"
