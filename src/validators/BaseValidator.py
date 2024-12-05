@@ -1,10 +1,16 @@
+"""Base validation functionality for data quality checks using Polars DataFrames."""
+
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, Iterator, List, Tuple
+from typing import Iterator, Tuple
 
 import polars as pl
 
 
 class BaseValidator(ABC):
+    """Base validator class for applying data quality rules to Polars DataFrames.
+    
+    Subclasses must implement _get_validation_expressions().
+    """
     def _get_base_validations(self) -> Iterator[Tuple[str, pl.Expr]]:
         """Base validation expressions that apply to all data types"""
         # Subclasses can call super()._get_base_validations() to include these
@@ -16,6 +22,14 @@ class BaseValidator(ABC):
         pass
 
     def validate(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Apply validation rules and add validation result columns.
+        
+        Args:
+            df: Input DataFrame to validate
+            
+        Returns:
+            DataFrame with added is_valid and validation_results columns
+        """
         # Collect all validation expressions and their names
         validations = list(self._get_validation_expressions())
 
