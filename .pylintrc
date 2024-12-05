@@ -1,0 +1,4 @@
+# .pylintrc
+[MASTER]
+# Ignore import errors
+disable=E0401,C0103,W0107
