@@ -4,15 +4,17 @@ x-airflow-common: &airflow-common
     - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
     - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
     - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+    - PYTHONPATH=/opt/airflow
   volumes: &airflow-common-volumes
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/plugins:/opt/airflow/plugins
+    - ./src:/opt/airflow/src
   user: "${AIRFLOW_UID:-50000}:0"
 
 services:
   postgres:
-    image: postgres:15
+    image: postgis/postgis:latest
     environment:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
@@ -99,4 +101,4 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
-    command: celery worker
+    command: airflow celery worker
