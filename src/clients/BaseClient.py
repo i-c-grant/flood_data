@@ -1,3 +1,5 @@
+"""Base client interface for data source access with spatiotemporal filtering."""
+
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional, Union
@@ -9,6 +11,7 @@ SpatialFilter = Optional[gpd.GeoSeries]
 
 
 class BaseClient(ABC):
+    """Abstract base client for fetching filtered data from a source."""
     @abstractmethod
     def get_data(
         self,

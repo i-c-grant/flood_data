@@ -1,10 +1,23 @@
+"""Client for interacting with the FloodNet API to fetch flood sensor data.
+
+This module provides a client implementation for accessing the FloodNet sensor network.
+It supports:
+
+- Fetching deployment locations and metadata
+- Retrieving time-series depth measurements
+- Spatial filtering of deployments by geographic bounds
+- Temporal filtering of data by time range or point-in-time
+
+The client implements the BaseClient interface.
+"""
+
 import logging
-from datetime import datetime, timezone
+import warnings
+from datetime import datetime
 from typing import Any, Dict, Iterable
 
 import geopandas as gpd
 import polars as pl
-import requests
 from airflow.providers.http.hooks.http import HttpHook
 from shapely.geometry.base import BaseGeometry
 from src.clients.BaseClient import BaseClient, SpatialFilter, TemporalFilter
@@ -18,7 +31,7 @@ class FloodNetClient(BaseClient):
     """Client for fetching and processing FloodNet data"""
 
     def __init__(self, hook: HttpHook):
-        logger.info(f"Initializing FloodDataClient with connection ID: {hook}")
+        logger.info("Initializing FloodDataClient with connection ID: %s", hook)
         self.hook = hook
 
     def get_data(
@@ -59,10 +72,8 @@ class FloodNetClient(BaseClient):
             if isinstance(temporal_filter, tuple):
                 start_time, end_time = temporal_filter
             else:
-                # Single point in time
                 start_time = end_time = temporal_filter
 
-            # Fetch depth data for filtered deployments
             depth_data = self.fetch_depth_data(
                 deployments["deployment_id"], start_time, end_time
             )
@@ -71,7 +82,6 @@ class FloodNetClient(BaseClient):
                 logger.info("No depth data found for filtered deployments")
                 return pl.DataFrame()
 
-            # Join with deployments to include location info
             result = depth_data.join(
                 deployments.select(["deployment_id", "lon", "lat", "sensor_name"]),
                 on="deployment_id",
@@ -81,6 +91,7 @@ class FloodNetClient(BaseClient):
             return result
         else:
             # Without temporal filter, return just the deployments data
+            warnings.warn("No temporal filter provided, returning deployments only")
             return deployments
 
     def get_deployments(self) -> pl.DataFrame:
@@ -88,14 +99,15 @@ class FloodNetClient(BaseClient):
         logger.info("Fetching deployment data from API")
         try:
             response = self.hook.run("deployments/flood")
-            logger.info(f"API response received: status {response.status_code}")
+            logger.info("API response received: status %d", response.status_code)
             return self._process_deployments(response.json())
         except Exception as e:
-            logger.error(f"Error fetching deployments: {str(e)}")
+            logger.error("Error fetching deployments: %s", str(e))
             raise
 
     @staticmethod
     def create_hook() -> HttpHook:
+        """Create an HTTP hook configured for the FloodNet API."""
         hook = HttpHook(method="GET", base_url=API_BASE)
         return hook
 
@@ -103,8 +115,16 @@ class FloodNetClient(BaseClient):
     def st_filter_deployments_within(
         deployments: pl.DataFrame, bounds: gpd.GeoSeries
     ) -> pl.DataFrame:
-        """Filter deployment data to only those within given polygon layer"""
-        logger.info(f"Filtering deployments within {len(bounds)} bounds")
+        """Filter deployments to those within specified geographic bounds.
+        
+        Args:
+            deployments: DataFrame containing deployment locations
+            bounds: GeoSeries of polygons defining filter area
+            
+        Returns:
+            DataFrame of deployments within bounds
+        """
+        logger.info("Filtering deployments within %d bounds", len(bounds))
 
         deployments_gdf = gpd.GeoDataFrame(
             deployments.to_pandas(),
@@ -116,7 +136,7 @@ class FloodNetClient(BaseClient):
             logger.warning("Bounds CRS not set, assuming EPSG:4326")
             bounds = bounds.set_crs("EPSG:4326")
         elif bounds.crs != "EPSG:4326":
-            logger.info(f"Converting bounds from {bounds.crs} to EPSG:4326")
+            logger.info("Converting bounds from %s to EPSG:4326", bounds.crs)
             bounds = bounds.to_crs("EPSG:4326")
 
         bounds_union: BaseGeometry = bounds.union_all()
@@ -125,16 +145,32 @@ class FloodNetClient(BaseClient):
 
     @staticmethod
     def get_active_deployment_filter(active_by: datetime) -> pl.Expr:
-        """Filter for deployments installed before the given timestamp."""
+        """Create filter expression for active deployments.
+        
+        Args:
+            active_by: Datetime to check deployment status against
+            
+        Returns:
+            Polars expression filtering for deployments installed by given time
+        """
         return pl.col("date_deployed") <= pl.DateTime.from_python(active_by)
 
     @staticmethod
     def _process_deployments(data: Dict[str, Any]) -> pl.DataFrame:
-        """Transform raw deployment data into structured DataFrame"""
+        """Transform raw deployment API response into structured DataFrame.
+        
+        Extracts coordinates and converts timestamps from the raw JSON response.
+        
+        Args:
+            data: Raw API response dictionary
+            
+        Returns:
+            DataFrame with processed deployment records
+        """
 
         try:
             deployments = pl.DataFrame(data["deployments"])
-            logger.debug(f"Initial deployments shape: {deployments.shape}")
+            logger.debug("Initial deployments shape: %s", deployments.shape)
 
             # Add separate lon/lat columns
             processed_deployments = deployments.with_columns(
@@ -146,10 +182,10 @@ class FloodNetClient(BaseClient):
                 pl.col("coords").list.last().alias("lat"),
             )
 
-            logger.info(f"Processed {len(processed_deployments)} deployment records")
+            logger.info("Processed %d deployment records", len(processed_deployments))
             return processed_deployments
         except Exception as e:
-            logger.error(f"Error processing deployments data: {str(e)}")
+            logger.error("Error processing deployments data: %s", str(e))
             raise
 
     def get_deployment_depth(
@@ -166,7 +202,7 @@ class FloodNetClient(BaseClient):
         Returns:
             DataFrame containing depth readings or empty DataFrame if no data found
         """
-        logger.debug(f"Querying depth data for deployment {deployment_id}")
+        logger.debug("Querying depth data for deployment %s", deployment_id)
         try:
             response = self.hook.run(
                 f"deployments/flood/{deployment_id}/depth",
@@ -187,16 +223,18 @@ class FloodNetClient(BaseClient):
 
             if len(depth_data) > 0:
                 logger.debug(
-                    f"Got {len(depth_data)} readings for deployment {deployment_id}"
+                    "Got %d readings for deployment %s",
+                    len(depth_data),
+                    deployment_id
                 )
 
                 return depth_data
             else:
-                logger.debug(f"No depth data found for deployment {deployment_id}")
+                logger.debug("No depth data found for deployment %s", deployment_id)
                 return pl.DataFrame()
 
         except Exception as e:
-            logger.error(f"Error querying deployment {deployment_id}: {str(e)}")
+            logger.error("Error querying deployment %s: %s", deployment_id, str(e))
             return pl.DataFrame()
 
     def fetch_depth_data(
@@ -204,7 +242,7 @@ class FloodNetClient(BaseClient):
     ) -> pl.DataFrame:
         """Fetch and combine depth data for multiple deployments"""
         n_deployments = len(deployment_ids)
-        logger.info(f"Fetching depth data for {n_deployments} deployments")
+        logger.info("Fetching depth data for %d deployments", n_deployments)
 
         depth_data_list = []
         for deployment_id in deployment_ids:
@@ -218,6 +256,8 @@ class FloodNetClient(BaseClient):
 
         combined = pl.concat(depth_data_list)
         logger.info(
-            f"Combined {len(combined)} depth readings from {len(depth_data_list)} deployments"
+            "Combined %d depth readings from %d deployments",
+            len(combined),
+            len(depth_data_list)
         )
         return combined
