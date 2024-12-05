@@ -1,3 +1,5 @@
 *.pyc
 *.*~
 airflow/logs/*
+.aider*
+.env
