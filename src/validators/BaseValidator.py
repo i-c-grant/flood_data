@@ -1,10 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Callable, List
-import polars as pl
+from typing import Callable, Dict, Iterator, List, Tuple
 
-from abc import ABC, abstractmethod
 import polars as pl
-from typing import Iterator, Dict, Tuple
 
 
 class BaseValidator(ABC):
@@ -23,9 +20,8 @@ class BaseValidator(ABC):
         validations = list(self._get_validation_expressions())
 
         validated = df.with_columns(
-            [
                 # Conduct validations
-                expr.alias(f"validation_{name}") for name, expr in validations,
+                (expr.alias(f"validation_{name}") for name, expr in validations),
                 # Compute overall validity
                 pl.all_horizontal(
                     [pl.col(f"validation_{name}") for name, _ in validations]
@@ -36,8 +32,7 @@ class BaseValidator(ABC):
                         pl.col(f"validation_{name}").alias(name)
                         for name, _ in validations
                     ]
-                ).alias("validation_results"),
-            ]
+                ).alias("validation_results")
         ).drop([f"validation_{name}" for name, _ in validations])
 
         return validated
