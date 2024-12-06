@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable
 
 import geopandas as gpd
 import polars as pl
-from airflow.providers.http.hooks.http import HttpHook
+import requests
 from shapely.geometry.base import BaseGeometry
 from src.clients.BaseClient import BaseClient, SpatialFilter, TemporalFilter
 
@@ -26,11 +26,29 @@ logger = logging.getLogger(__name__)
 
 API_BASE: str = "https://api.dev.floodlabs.nyc/api/rest/"
 
+class DirectHttpHook:
+    """Simple hook that makes HTTP requests directly without Airflow"""
+
+    def __init__(
+        self,
+            base_url: str,
+            method: str = "GET",
+    ):
+        self.method = method
+        self.base_url = base_url
+
+    def run(self, endpoint: str, data: Dict[str, Any] = None) -> requests.Response:
+        url = f"{self.base_url}{endpoint}"
+        return requests.request(self.method, url, params=data)
+
+    def __str__(self):
+        return f"DirectHttpHook(method={self.method}, base_url={self.base_url})"
+
 
 class FloodNetClient(BaseClient):
     """Client for fetching and processing FloodNet data"""
 
-    def __init__(self, hook: HttpHook):
+    def __init__(self, hook: DirectHttpHook):
         logger.info("Initializing FloodDataClient with connection ID: %s", hook)
         self.hook = hook
 
@@ -83,7 +101,7 @@ class FloodNetClient(BaseClient):
                 return pl.DataFrame()
 
             result = depth_data.join(
-                deployments.select(["deployment_id", "lon", "lat", "sensor_name"]),
+                deployments.select(["deployment_id", "lon", "lat", "name"]),
                 on="deployment_id",
                 how="left",
             )
@@ -106,9 +124,9 @@ class FloodNetClient(BaseClient):
             raise
 
     @staticmethod
-    def create_hook() -> HttpHook:
+    def create_hook() -> DirectHttpHook:
         """Create an HTTP hook configured for the FloodNet API."""
-        hook = HttpHook(method="GET", base_url=API_BASE)
+        hook = DirectHttpHook(method="GET", base_url=API_BASE)
         return hook
 
     @staticmethod
@@ -153,7 +171,7 @@ class FloodNetClient(BaseClient):
         Returns:
             Polars expression filtering for deployments installed by given time
         """
-        return pl.col("date_deployed") <= pl.DateTime.from_python(active_by)
+        return pl.col("date_deployed") <= active_by
 
     @staticmethod
     def _process_deployments(data: Dict[str, Any]) -> pl.DataFrame:
@@ -175,7 +193,7 @@ class FloodNetClient(BaseClient):
             # Add separate lon/lat columns
             processed_deployments = deployments.with_columns(
                 pl.col("location").struct.field("coordinates").alias("coords"),
-                pl.col("date_deployed").str.to_datetime(),
+                pl.col("date_deployed").str.to_datetime(time_zone = "UTC"),
             ).select(
                 pl.all().exclude("location", "coords"),
                 pl.col("coords").list.first().alias("lon"),
