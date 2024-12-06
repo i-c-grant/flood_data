@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
 
@@ -7,36 +7,26 @@ import geopandas as gpd
 import polars as pl
 import pytest
 import requests
-from src.clients.FloodNetClient import FloodNetClient
+from src.clients.FloodNetClient import FloodNetClient, DirectHttpHook
 
 logger = logging.getLogger(__name__)
+log_file = "tests/floodnet_client_test.log"
 
+open(log_file, "w").close()
 
-class DirectHttpHook:
-    """Simple hook that makes HTTP requests directly without Airflow"""
+# Set up logging to file
+logging.basicConfig(
+    level=logging.INFO, filename=log_file, filemode="w", format="%(asctime)s - %(message)s"
+)
 
-    def __init__(
-        self,
-        method: str = "GET",
-        base_url: str = "https://api.dev.floodlabs.nyc/api/rest/",
-    ):
-        self.method = method
-        self.base_url = base_url
-
-    def run(self, endpoint: str, data: Dict[str, Any] = None) -> requests.Response:
-        url = f"{self.base_url}{endpoint}"
-        return requests.request(self.method, url, params=data)
-
-    def __str__(self):
-        return "dummy hook"
-
+API_BASE: str = "https://api.dev.floodlabs.nyc/api/rest/"
 
 ######################################
 # General processing and API  tests  #
 ######################################
 @pytest.fixture
 def client():
-    hook = DirectHttpHook()
+    hook = DirectHttpHook(API_BASE)
     return FloodNetClient(hook)  # Uses default "floodnet_default" connection ID
 
 
@@ -44,9 +34,10 @@ def test_get_deployments(client):
     """Test fetching real deployment data"""
     deployments = client.get_deployments()
 
-    # Verify structure
+    # Verify structure and print columns
     assert isinstance(deployments, pl.DataFrame)
     required_cols = {"deployment_id", "lon", "lat", "date_deployed", "sensor_status"}
+    print(f"Deployment columns: {deployments.columns}")
     assert all(col in deployments.columns for col in required_cols)
 
     # Verify data types
@@ -57,7 +48,8 @@ def test_get_deployments(client):
     assert all((-74.3 < lon < -73.7) for lon in deployments["lon"])
     assert all((40.4 < lat < 40.95) for lat in deployments["lat"])
 
-    print(f"Found {len(deployments)} total deployments")
+    logger.info(f"Found {len(deployments)} total deployments")
+    logger.info(f"Columns: {deployments.columns}")
 
 
 def test_get_single_deployment_depth(client):
@@ -71,13 +63,14 @@ def test_get_single_deployment_depth(client):
 
     # Get depth data for the last week
     deployment_id = active_deployments["deployment_id"][0]
-    end_time = datetime.now(UTC)
+    end_time = datetime.now()
     start_time = end_time - timedelta(days=1)
 
     depth_data = client.get_deployment_depth(deployment_id, start_time, end_time)
 
-    # Verify structure
+    # Verify structure and print columns
     assert isinstance(depth_data, pl.DataFrame)
+    print(f"Depth data columns: {depth_data.columns}")
     assert "time" in depth_data.columns
     assert "depth_proc_mm" in depth_data.columns
 
@@ -91,9 +84,10 @@ def test_get_single_deployment_depth(client):
             (0 <= d <= 1000) for d in depth_data["depth_proc_mm"] if d is not None
         )
 
-        print(f"Found {len(depth_data)} readings for deployment {deployment_id}")
+        logger.info(f"Found {len(depth_data)} readings for deployment {deployment_id}")
+        logger.info(f"Columns: {depth_data.columns}")
     else:
-        print(f"No recent depth readings for deployment {deployment_id}")
+        logger.info(f"No recent depth readings for deployment {deployment_id}")
 
 
 def test_fetch_multiple_deployments(client):
@@ -133,11 +127,37 @@ def test_fetch_multiple_deployments(client):
         print("No recent depth readings found")
 
 
+def test_download_script(client, monkeypatch):
+    """Test the download script functionality"""
+    from src.scripts.download_floodnet_data import main
+    
+    # Mock PostgresHook
+    class MockPgHook:
+        def insert_rows(self, *args, **kwargs):
+            print("Mock insert_rows called")
+            return True
+            
+        def run(self, *args, **kwargs):
+            print("Mock run called")
+            return True
+    
+    # Patch the PostgresHook import
+    monkeypatch.setattr("src.scripts.download_floodnet_data.PostgresHook", 
+                       lambda postgres_conn_id: MockPgHook())
+    
+    # Patch the DirectHttpHook creation to use our test client's hook
+    monkeypatch.setattr("src.scripts.download_floodnet_data.DirectHttpHook",
+                       lambda *args: client.hook)
+    
+    # Run the script
+    main()
+    
 if __name__ == "__main__":
-    client = FloodNetClient()  # Uses default connection ID
+    client = FloodNetClient(DirectHttpHook(API_BASE))
     test_get_deployments(client)
     test_get_single_deployment_depth(client)
     test_fetch_multiple_deployments(client)
+    test_download_script(client, None)  # Note: monkeypatch won't work in __main__
 
 
 #################
@@ -261,3 +281,58 @@ def test_multiple_polygons(client, test_geometries):
     assert len(filtered) < len(nyc_deployments)
 
     print(f"Found {len(filtered)} deployments in Brooklyn and Queens combined")
+
+
+def test_download_script(client, monkeypatch):
+    """Test the download script functionality"""
+    from src.scripts.download_floodnet_data import main
+    
+    # Track inserted data
+    inserted_deployments = []
+    inserted_readings = []
+    
+    # Mock PostgresHook
+    class MockPgHook:
+        def insert_rows(self, table, rows, *args, **kwargs):
+            nonlocal inserted_deployments
+            if table == 'data.floodnet_deployments':
+                inserted_deployments.extend(rows)
+            return True
+            
+        def run(self, query, parameters=None, *args, **kwargs):
+            nonlocal inserted_readings
+            if parameters and "floodnet_readings" in query:
+                inserted_readings.extend(parameters)
+            return True
+    
+    # Patch the PostgresHook import
+    monkeypatch.setattr("src.scripts.download_floodnet_data.PostgresHook", 
+                       lambda postgres_conn_id: MockPgHook())
+    
+    # Patch the DirectHttpHook creation to use our test client's hook
+    monkeypatch.setattr("src.scripts.download_floodnet_data.DirectHttpHook",
+                       lambda *args: client.hook)
+    
+    # Run the script
+    main()
+    
+    # Verify data was processed
+    assert len(inserted_deployments) > 0, "No deployments were processed"
+    print(f"Processed {len(inserted_deployments)} deployments")
+    
+    # Verify deployment data structure
+    for deployment in inserted_deployments:
+        assert len(deployment) == 6, "Incorrect deployment record structure"
+        deployment_id, name, status, date, lon, lat = deployment
+        assert all(x is not None for x in (deployment_id, lon, lat))
+        assert isinstance(lon, float) and isinstance(lat, float)
+        
+    # Verify readings if any were inserted
+    if inserted_readings:
+        print(f"Processed {len(inserted_readings)} readings")
+        for reading in inserted_readings:
+            assert len(reading) == 3, "Incorrect reading record structure"
+            deployment_id, timestamp, depth = reading
+            assert deployment_id is not None
+            assert isinstance(timestamp, datetime)
+            assert isinstance(depth, (float, type(None)))
