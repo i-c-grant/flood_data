@@ -9,6 +9,8 @@ from airflow.operators.postgres_operator import PostgresOperator
 SCHEMA_VERSION = "1.0"
 SCHEMA_VERSION_KEY = "floodnet_schema_version"
 
+VENV_PYTHON_PATH = "/opt/conda/envs/flooding_data/bin/python"
+
 with DAG(
     'floodnet_schema_management',
     description='Manage FloodNet database schema',
