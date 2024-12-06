@@ -2,11 +2,12 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional, Union
-import polars as pl
-import geopandas as gpd
+from typing import Optional, Union, Tuple
 
-TemporalFilter = Optional[Union[datetime, tuple[datetime, datetime]]]
+import geopandas as gpd
+import polars as pl
+
+TemporalFilter = Optional[Union[datetime, Tuple[datetime, datetime]]]
 SpatialFilter = Optional[gpd.GeoSeries]
 
 
@@ -15,8 +16,8 @@ class BaseClient(ABC):
     @abstractmethod
     def get_data(
         self,
-        spatial_filter: Optional[gpd.GeoSeries] = None,
-        temporal_filter: Optional[Union[datetime, tuple[datetime, datetime]]] = None,
+        spatial_filter: SpatialFilter = None,
+        temporal_filter: TemporalFilter = None,
     ) -> pl.DataFrame:
         """Fetch data with optional spatial and temporal filtering
 
