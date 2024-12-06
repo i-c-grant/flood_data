@@ -1,5 +1,5 @@
 # Start from the official Apache Airflow image
-FROM apache/airflow:2.8.1
+FROM apache/airflow:2.7.3
 
 USER root
 
@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     git \
-    emacs-nox \
     && rm -rf /var/lib/apt/lists/*
 
 # Install micromamba
@@ -30,8 +29,7 @@ RUN micromamba create -y -f /tmp/environment.yml && \
 # Switch back to airflow user
 USER airflow
 
-# Add conda environment activation to bashrc
-RUN echo 'eval "$(micromamba shell hook --shell bash)"' >> ~/.bashrc && \
-    echo "micromamba activate flooding_data" >> ~/.bashrc
+# Add micromamba shell initalization to bashrc
+RUN echo 'eval "$(micromamba shell hook --shell bash)"' >> ~/.bashrc
 
 # The default CMD from the Airflow image will still work

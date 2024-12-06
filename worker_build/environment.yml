@@ -19,3 +19,6 @@ dependencies:
   # Build tools
   - build
   - setuptools
+  # Airflow
+  - apache-airflow=2.7.3
+  - apache-airflow-providers-postgres
