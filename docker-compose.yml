@@ -1,75 +1,63 @@
-x-airflow-common: &airflow-common
-  environment: &airflow-common-env
-    - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-    - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
-    - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
-    - PYTHONPATH=/opt/airflow
-  volumes: &airflow-common-volumes
-    - ./airflow/dags:/opt/airflow/dags
-    - ./airflow/logs:/opt/airflow/logs
-    - ./airflow/plugins:/opt/airflow/plugins
-    - ./src:/opt/airflow/src
-  user: "${AIRFLOW_UID:-50000}:0"
+version: '3.8'
 
 services:
-  postgres:
-    image: postgis/postgis:latest
+  # PostGIS container
+  postgis:
+    image: postgis/postgis:15-3.3
     environment:
-      - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=airflow
-      - POSTGRES_DB=airflow
+      POSTGRES_USER: spatial_user
+      POSTGRES_PASSWORD: spatial_pass
+      POSTGRES_DB: spatial_db
     volumes:
-      - ./airflow/data/postgres:/var/lib/postgresql/data
+      - postgis-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "spatial_user", "-d", "spatial_db"]
+      interval: 5s
+      retries: 5
+
+  # Airflow metadata database
+  airflow-db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 5s
       retries: 5
 
-  redis:
-    image: redis:latest
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 30s
-      retries: 50
-
   airflow-init:
-    image: apache/airflow:2.7.3
-    <<: *airflow-common
+    image: apache/airflow:2.7.1
     depends_on:
-      postgres:
-        condition: service_healthy
-    command: |
-       bash -c '
-       airflow db migrate && \
-       airflow connections create-default-connections && \
-       airflow connections delete postgres_results || true && \
-       airflow connections add postgres_results \
-       --conn-type postgres \
-       --conn-host postgres \
-       --conn-login airflow \
-       --conn-password airflow \
-       --conn-schema airflow && \
-       airflow users create \
-       --username admin \
-       --firstname Admin \
-       --lastname User \
-       --role Admin \
-       --email admin@example.com \
-       --password admin
-       '
+      - airflow-db
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+    command: version
 
   airflow-webserver:
-    image: apache/airflow:2.7.3
-    <<: *airflow-common
+    image: apache/airflow:2.7.1
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
+      - airflow-init
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
     ports:
       - "8080:8080"
     command: webserver
@@ -80,34 +68,18 @@ services:
       retries: 5
 
   airflow-scheduler:
-    image: apache/airflow:2.7.3
-    <<: *airflow-common
+    image: apache/airflow:2.7.1
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
+      - airflow-webserver
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./plugins:/opt/airflow/plugins
     command: scheduler
 
-  airflow-worker:
-    image: airflow-flooding:latest
-    <<: *airflow-common
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
-      - PYTHONPATH=/opt/airflow
-      # airflow-flooding container executes in micromamba env,
-      # so we need to point to the airflow executable
-      - PATH=/home/airflow/.local/bin:${PATH}
-    command: celery worker
+volumes:
+  postgis-data:
+  airflow-db-data:
